@@ -36,6 +36,7 @@
 #include <lualib.h>
 #include <ctype.h>
 #include <math.h>
+#include <pthread.h>
 
 char *redisProtocolToLuaType_Int(lua_State *lua, char *reply);
 char *redisProtocolToLuaType_Bulk(lua_State *lua, char *reply);
@@ -902,15 +903,21 @@ int luaCreateFunction(redisClient *c, lua_State *lua, char *funcname, robj *body
     return REDIS_OK;
 }
 
+
 void evalGenericCommand(redisClient *c, int evalsha) {
     lua_State *lua = server.lua;
     char funcname[43];
     long long numkeys;
     int delhook = 0, err;
 
+    printf("in evalGenericCommand!! %p\n", c->argv[2]);
+
     /* We want the same PRNG sequence at every call so that our PRNG is
      * not affected by external state. */
     redisSrand48(0);
+
+    printf("in evalGenericCommand 2 !! %p\n", server);
+
 
     /* We set this flag to zero to remember that so far no random command
      * was called. This way we can allow the user to call commands like
@@ -923,16 +930,31 @@ void evalGenericCommand(redisClient *c, int evalsha) {
     server.lua_random_dirty = 0;
     server.lua_write_dirty = 0;
 
+    printf("in evalGenericCommand 3 !! %p\n", c->argv[2]);
+
+    getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL);
+
+    printf("in evalGenericCommand 0 !! %p\n", c->argv[2]);
+
     /* Get the number of arguments that are keys */
-    if (getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL) != REDIS_OK)
+    if (getLongLongFromObjectOrReply(c,c->argv[2],&numkeys,NULL) != REDIS_OK) {
+        printf("in evalGenericCommand 3.1 !! %p\n", c->argv[2]);
+
         return;
+    }
     if (numkeys > (c->argc - 3)) {
+        printf("in evalGenericCommand 3.2 !! %p\n", c->argv[2]);
+
         addReplyError(c,"Number of keys can't be greater than number of args");
         return;
     } else if (numkeys < 0) {
+        printf("in evalGenericCommand 3.3 !! %p\n", c->argv[2]);
+
         addReplyError(c,"Number of keys can't be negative");
         return;
     }
+
+    printf("in evalGenericCommand 4!! %p\n", c->argv[2]);
 
     /* We obtain the script SHA1, then check if this function is already
      * defined into the Lua state */
@@ -953,6 +975,9 @@ void evalGenericCommand(redisClient *c, int evalsha) {
             funcname[j+2] = (sha[j] >= 'A' && sha[j] <= 'Z') ?
                 sha[j]+('a'-'A') : sha[j];
         funcname[42] = '\0';
+
+        printf("in evalGenericCommand>>> %s\n", sha );
+
     }
 
     /* Push the pcall error handler function on the stack. */
@@ -1004,7 +1029,12 @@ void evalGenericCommand(redisClient *c, int evalsha) {
     /* At this point whether this script was never seen before or if it was
      * already defined, we can call it. We have zero arguments and expect
      * a single return value. */
+
+    printf("in evalGenericCommand bef!!\n");
+
     err = lua_pcall(lua,0,1,-2);
+
+    printf("in evalGenericCommand aft!!\n");
 
     /* Perform some cleanup that we need to do both on error and success. */
     if (delhook) lua_sethook(lua,luaMaskCountHook,0,0); /* Disable hook */
@@ -1070,7 +1100,18 @@ void evalGenericCommand(redisClient *c, int evalsha) {
             forceCommandPropagation(c,REDIS_PROPAGATE_REPL|REDIS_PROPAGATE_AOF);
         }
     }
+
+    printf("in evalGenericCommand final!!\n");
+
 }
+
+
+void *evalGenericCommandWrapper(void *c) {
+
+    evalGenericCommand((redisClient *)c, 1);
+
+}
+
 
 void evalCommand(redisClient *c) {
     evalGenericCommand(c,0);
@@ -1085,7 +1126,24 @@ void evalShaCommand(redisClient *c) {
         addReply(c, shared.noscripterr);
         return;
     }
-    evalGenericCommand(c,1);
+
+    // solso
+    printf("hello? \n");
+
+    pthread_t      tid;  // thread ID
+    pthread_attr_t attr; // thread attribute
+
+    // set thread detachstate attribute to DETACHED
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+    pthread_create(&tid, &attr, evalGenericCommandWrapper, c);
+
+    //pthread_join(tid, NULL);
+
+    //evalGenericCommand(c,1);
+    printf("bye\n");
+
 }
 
 /* We replace math.random() with our implementation that is not affected
